@@ -14,7 +14,20 @@ import Control.Monad
 import Happstack.Server
 import Happstack.State
 
-import Happstack.Auth
+import Happstack.Auth ( withSession
+                      , withSessionId
+                      , sesUsername
+                      , NewUserInfo(NewUserInfo)
+                      , GetSession(GetSession)
+                      , logoutHandler
+                      , Username(Username)
+                      , checkAndAdd
+                      , loginHandler
+                      , AuthState
+                      , SessionData
+                      , unUser
+                      , ListUsers(ListUsers)
+                      )
 
 impl = msum
     -- If logged in, then redirect to the root, otherwise display
