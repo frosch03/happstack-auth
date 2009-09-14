@@ -27,75 +27,93 @@ import Happstack.State
 
 sessionCookie = "sid"
 
-newtype SessionKey = SessionKey Integer deriving (Read,Show,Ord,Eq,Typeable,Data,Num,Random)
+newtype SessionKey = SessionKey Integer 
+    deriving (Read,Show,Ord,Eq,Typeable,Data,Num,Random)
+
 instance Version SessionKey
 $(deriveSerialize ''SessionKey)
 
-newtype UserId = UserId { unUid :: Word64 } deriving (Read,Show,Ord,Eq,Typeable,Data,Num)
+
+newtype UserId = UserId { unUid :: Word64 } 
+    deriving (Read,Show,Ord,Eq,Typeable,Data,Num)
+
 instance Version UserId
 $(deriveSerialize ''UserId)
 
-newtype Username = Username { unUser :: String } deriving (Read,Show,Ord,Eq,Typeable,Data)
+
+newtype Username = Username { unUser :: String } 
+    deriving (Read,Show,Ord,Eq,Typeable,Data)
+
 instance Version Username
 $(deriveSerialize ''Username)
 
-data SessionData = SessionData {
-  sesUid :: UserId,
-  sesUsername :: Username
-} deriving (Read,Show,Eq,Typeable,Data)
 
-newtype SaltedHash = SaltedHash [Octet] deriving (Read,Show,Ord,Eq,Typeable,Data)
+data SessionData = SessionData { sesUid      :: UserId,
+                                 sesUsername :: Username
+                               } 
+    deriving (Read,Show,Eq,Typeable,Data)
+
+
+newtype SaltedHash = SaltedHash [Octet] 
+    deriving (Read,Show,Ord,Eq,Typeable,Data)
+
 instance Version SaltedHash
 $(deriveSerialize ''SaltedHash)
 
 saltLength = 16
+
 strToOctets = listToOctets . (map c2w)
+
 slowHash a = (iterate hash a) !! 512
+
 randomSalt :: IO String
-randomSalt = liftM concat $ sequence $ take saltLength $ repeat $
-  randomRIO (0::Int,15) >>= return . flip showHex ""
+randomSalt = liftM concat $ sequence $ take saltLength $ repeat $ randomRIO (0::Int,15) >>= return . flip showHex ""
+
 buildSaltAndHash :: String -> IO SaltedHash
-buildSaltAndHash str = do
-  salt <- randomSalt
-  let salt' = strToOctets salt
-  let str' = strToOctets str
-  let h = slowHash (salt'++str')
-  return $ SaltedHash $ salt'++h
+buildSaltAndHash str = 
+    do salt <- randomSalt
+       let salt' = strToOctets salt
+       let str'  = strToOctets str
+       let h     = slowHash (salt'++str')
+       return $ SaltedHash $ salt'++h
+
 checkSalt :: String -> SaltedHash -> Bool
 checkSalt str (SaltedHash h) = h == salt++(slowHash $ salt++(strToOctets str))
-  where salt = take saltLength h
+    where salt = take saltLength h
   
-data Sessions a = Sessions {unsession::M.Map SessionKey a}
-  deriving (Read,Show,Eq,Typeable,Data)
+data Sessions a = Sessions { unsession::M.Map SessionKey a }
+    deriving (Read,Show,Eq,Typeable,Data)
 
-data User = User {
-  userid :: UserId,
-  username :: Username,
-  userpass :: SaltedHash
-} deriving (Read,Show,Ord,Eq,Typeable,Data)
-
+data User = User { userid :: UserId,
+                   username :: Username,
+                   userpass :: SaltedHash 
+                 } 
+    deriving (Read,Show,Ord,Eq,Typeable,Data)
 $(inferIxSet "UserDB" ''User 'noCalcs [''UserId, ''Username])
 
-data AuthState = AuthState {
-  sessions :: Sessions SessionData,
-  users :: UserDB,
-  nextUid :: UserId
-} deriving (Show,Read,Typeable,Data)
-instance Version SessionData
-instance Version (Sessions a)
+data AuthState = AuthState { sessions :: Sessions SessionData,
+                             users :: UserDB,
+                             nextUid :: UserId 
+                           } 
+    deriving (Show,Read,Typeable,Data)
 
+instance Version SessionData
 $(deriveSerialize ''SessionData)
+
+instance Version (Sessions a)
 $(deriveSerialize ''Sessions)
 
-instance Version AuthState
 instance Version User
-
 $(deriveSerialize ''User)
+
+instance Version AuthState
 $(deriveSerialize ''AuthState)
 
-instance Component AuthState where
-  type Dependencies AuthState = End
-  initialValue = AuthState (Sessions M.empty) empty 0
+instance Component AuthState 
+    where type Dependencies AuthState = End
+          initialValue                = AuthState (Sessions M.empty) empty 0
+
+-- * cut :) 
 
 askUsers :: Query AuthState UserDB
 askUsers = return . users =<< ask
