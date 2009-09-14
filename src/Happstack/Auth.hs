@@ -60,8 +60,10 @@ newtype SaltedHash = SaltedHash [Octet]
 instance Version SaltedHash
 $(deriveSerialize ''SaltedHash)
 
+saltLength :: Int
 saltLength = 16
 
+strToOctets :: String -> [Octet]
 strToOctets = listToOctets . (map c2w)
 
 slowHash a = (iterate hash a) !! 512
