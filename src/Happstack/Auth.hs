@@ -39,6 +39,10 @@ import Happstack.Data.IxSet
 import Happstack.Server
 import Happstack.State
 
+import Control.Monad.State.Lazy
+import GHC.Conc
+
+sessionCookie :: String
 sessionCookie = "sid"
 
 newtype SessionKey = SessionKey Integer 
@@ -74,12 +78,14 @@ newtype SaltedHash = SaltedHash [Octet]
 instance Version SaltedHash
 $(deriveSerialize ''SaltedHash)
 
+
 saltLength :: Int
 saltLength = 16
 
 strToOctets :: String -> [Octet]
 strToOctets = listToOctets . (map c2w)
 
+slowHash :: [Octet] -> [Octet]
 slowHash a = (iterate hash a) !! 512
 
 randomSalt :: IO String
@@ -97,6 +103,7 @@ checkSalt :: String -> SaltedHash -> Bool
 checkSalt str (SaltedHash h) = h == salt++(slowHash $ salt++(strToOctets str))
     where salt = take saltLength h
   
+
 data Sessions a = Sessions { unsession::M.Map SessionKey a }
     deriving (Read,Show,Eq,Typeable,Data)
 
@@ -129,7 +136,6 @@ instance Component AuthState
     where type Dependencies AuthState = End
           initialValue                = AuthState (Sessions M.empty) empty 0
 
--- * cut :) 
 
 askUsers :: Query AuthState UserDB
 askUsers = return . users =<< ask
@@ -138,14 +144,14 @@ askSessions :: Query AuthState (Sessions SessionData)
 askSessions = return . sessions =<< ask
 
 getUser :: Username -> Query AuthState (Maybe User)
-getUser username = do
-  udb <- askUsers
-  return $ getOne $ udb @= username
+getUser username = 
+    do udb <- askUsers
+       return $ getOne $ udb @= username
 
 getUserById :: UserId -> Query AuthState (Maybe User)
-getUserById uid = do
-  udb <- askUsers
-  return $ getOne $ udb @= uid
+getUserById uid = 
+    do udb <- askUsers
+       return $ getOne $ udb @= uid
 
 modUsers :: (UserDB -> UserDB) -> Update AuthState ()
 modUsers f = modify (\s -> (AuthState (sessions s) (f $ users s) (nextUid s)))
@@ -154,27 +160,27 @@ modSessions :: (Sessions SessionData -> Sessions SessionData) -> Update AuthStat
 modSessions f = modify (\s -> (AuthState (f $ sessions s) (users s) (nextUid s)))
 
 getAndIncUid :: Update AuthState UserId
-getAndIncUid = do
-  uid <- gets nextUid
-  modify (\s -> (AuthState (sessions s) (users s) (uid+1)))
-  return uid
+getAndIncUid = 
+    do uid <- gets nextUid
+       modify (\s -> (AuthState (sessions s) (users s) (uid+1)))
+       return uid
 
 isUser :: Username -> Query AuthState Bool
-isUser name = do
-  us <- askUsers
-  return $ isJust $ getOne $ us @= name
+isUser name = 
+    do us <- askUsers
+       return $ isJust $ getOne $ us @= name
 
+-- ***
 addUser :: Username -> SaltedHash -> Update AuthState (Maybe User)
-addUser name pass = do
-  s <- get
-  let exists = isJust $ getOne $ (users s) @= name
-  if exists
-    then return Nothing
-    else do u <- newUser name pass
-            modUsers $ insert u
-            return $ Just u
-  where newUser u p = do uid <- getAndIncUid
-                         return $ User uid u p
+addUser name pass = 
+    do s <- get
+       let exists = isJust $ getOne $ (users s) @= name
+       if exists then return Nothing
+                 else do u <- newUser name pass
+                         modUsers $ insert u
+                         return $ Just u
+    where newUser u p = do uid <- getAndIncUid
+                           return $ User uid u p
 
 delUser :: Username -> Update AuthState ()
 delUser name = modUsers del
@@ -182,33 +188,37 @@ delUser name = modUsers del
                    Just u -> delete u db
                    Nothing -> db
 
+updateUser :: User -> Update AuthState ()
 updateUser u = do modUsers (updateIx (userid u) u)
 
 authUser :: String -> String -> Query AuthState (Maybe User)
-authUser name pass = do
-  udb <- askUsers
-  let u = getOne $ udb @= (Username name)
-  case u of
-    (Just v) -> return $ if checkSalt pass (userpass v) then u else Nothing
-    Nothing  -> return Nothing
+authUser name pass = 
+    do udb <- askUsers
+       let u = getOne $ udb @= (Username name)
+       case u of 
+            (Just v) -> return $ if checkSalt pass (userpass v) then u else Nothing
+            Nothing  -> return Nothing
 
 listUsers :: Query AuthState [Username]
-listUsers = do
-  udb <- askUsers
-  return $ map username $ toList udb
+listUsers = 
+    do udb <- askUsers
+       return $ map username $ toList udb
 
 numUsers :: Query AuthState Int
 numUsers = liftM length listUsers
 
 setSession :: SessionKey -> SessionData -> Update AuthState ()
-setSession key u = do
-  modSessions $ Sessions . (M.insert key u) . unsession
-  return ()
+setSession key u = 
+    do modSessions $ Sessions . (M.insert key u) . unsession
+       return ()
 
-newSession u = do
-  key <- getRandom
-  setSession key u
-  return key
+newSession :: SessionData -> Ev (StateT AuthState STM) SessionKey
+newSession u = 
+    do key <- getRandom
+       setSession key u
+       return key
+
+-- *** CUT :) 
 
 delSession :: SessionKey -> Update AuthState ()
 delSession key = do
