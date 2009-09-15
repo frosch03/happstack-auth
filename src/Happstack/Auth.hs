@@ -4,7 +4,21 @@
              UndecidableInstances, OverlappingInstances,
              MultiParamTypeClasses, GeneralizedNewtypeDeriving #-}
 
-module Happstack.Auth where
+module Happstack.Auth ( withSession
+                      , withSessionId
+                      , sesUsername
+                      , NewUserInfo(NewUserInfo)
+                      , GetSession(GetSession)
+                      , logoutHandler
+                      , Username(Username)
+                      , checkAndAdd
+                      , loginHandler
+                      , AuthState
+                      , SessionData
+                      , unUser
+                      , ListUsers(ListUsers)
+                      , SessionKey
+                      ) where
 
 import Char
 import Maybe
