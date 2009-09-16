@@ -218,7 +218,6 @@ newSession u =
        setSession key u
        return key
 
--- *** CUT :) 
 
 delSession :: SessionKey -> Update AuthState ()
 delSession key = do
@@ -234,134 +233,138 @@ getSession key = liftM ((M.lookup key) . unsession) askSessions
 getSessions :: SessionKey -> Query AuthState (Sessions SessionData)
 getSessions key = askSessions
 
-numSessions:: Query AuthState Int
+numSessions :: Query AuthState Int
 numSessions = liftM (M.size . unsession) askSessions
 
-$(mkMethods ''AuthState ['askUsers, 'addUser, 'getUser, 'getUserById, 'delUser, 'authUser,
-             'isUser, 'listUsers, 'numUsers, 'updateUser, 'clearAllSessions,
-             'setSession, 'getSession, 'getSessions, 'newSession, 'delSession, 'numSessions])
+$(mkMethods ''AuthState [ 'askUsers, 'addUser, 'getUser, 'getUserById, 'delUser, 'authUser, 'isUser, 'listUsers, 'numUsers, 'updateUser
+                        , 'clearAllSessions, 'setSession, 'getSession, 'getSessions, 'newSession, 'delSession, 'numSessions
+                        ])
 
 {-
  - Login page
  -}
 
 data UserAuthInfo = UserAuthInfo String String
-instance FromData UserAuthInfo where
-  fromData = liftM2 UserAuthInfo (look "username")
-             (look "password" `mplus` return "nopassword")
+instance FromData UserAuthInfo 
+    where fromData = liftM2 UserAuthInfo (look "username") 
+                                         (look "password" `mplus` return "nopassword")
 
-performLogin user = do
-  key <- update $ NewSession (SessionData (userid user) (username user))
-  addCookie (2678400) (mkCookie sessionCookie (show key))
+performLogin :: (FilterMonad Response m, MonadIO m) => User -> m ()
+performLogin user = 
+    do key <- update $ NewSession (SessionData (userid user) (username user))
+       addCookie (2678400) (mkCookie sessionCookie (show key))
 
 {-
  - Handles data from a login form to log the user in.  The form must supply
  - fields named "username" and "password".
  -}
+loginHandler :: (MonadIO m, ServerMonad m, FilterMonad Response m, MonadPlus m) => m b -> m b -> m b
 loginHandler successResponse failResponse = withData handler
-  where handler (UserAuthInfo user pass) = do
-          mu <- query $ AuthUser user pass
-          case mu of
-            Just u -> do performLogin u
-                         successResponse
-            Nothing -> failResponse
+    where handler (UserAuthInfo user pass) = do mu <- query $ AuthUser user pass
+                                                case mu of
+                                                  Just u -> do performLogin u
+                                                               successResponse
+                                                  Nothing -> failResponse
 
 {-
  - Logout page
  -}
 
-performLogout sid = do
-  clearSessionCookie
-  update $ DelSession sid
+performLogout :: (MonadIO m, FilterMonad Response m) => SessionKey -> m ()
+performLogout sid = 
+    do clearSessionCookie
+       update $ DelSession sid
 
+logoutHandler :: (MonadIO m, FilterMonad Response m, ServerMonad m, MonadPlus m) => m a -> m a
 logoutHandler target = withSessionId handler
-  where handler (Just sid) = do
-          performLogout sid
-          target
-        handler Nothing = target
+    where handler (Just sid) = do performLogout sid
+                                  target
+          handler  Nothing   = target
 
 {-
  - Registration page
  -}
 
 data NewUserInfo = NewUserInfo String String String
-instance FromData NewUserInfo where
-  fromData = liftM3 NewUserInfo (look "username")
-             (look "password" `mplus` return "nopassword")
-             (look "password2" `mplus` return "nopassword2")
+instance FromData NewUserInfo 
+    where fromData = liftM3 NewUserInfo (look "username")
+                                        (look "password" `mplus` return "nopassword")
+                                        (look "password2" `mplus` return "nopassword2")
 
-register user pass = do
-  h <- liftIO $ buildSaltAndHash pass
-  update $ AddUser user h
+register :: (MonadIO m) => Username -> String -> m (Maybe User)
+register user pass = 
+    do h <- liftIO $ buildSaltAndHash pass
+       update $ AddUser user h
 
-checkAndAdd uExists good user pass = do
-  u <- register user pass
-  case u of
-    Just u' -> do performLogin u'
-                  good
-    Nothing -> uExists
+checkAndAdd :: (MonadIO m, FilterMonad Response m) => m a -> m a -> Username -> String -> m a
+checkAndAdd uExists good user pass = 
+    do u <- register user pass
+       case u of
+         Just u' -> do performLogin u'
+                       good
+         Nothing -> uExists
 
+newUserHandler :: (MonadIO m, FilterMonad Response m, MonadPlus m, ServerMonad m) => m a -> m a -> m a -> m a
 newUserHandler existsOrInvalid nomatch succ = newUserHandler' existsOrInvalid nomatch (const succ)
 
 {- newUserHandler' passes the username of just created account to
  - the success part. This can be used to initiate any data associated
  - with a user.
  -}
+newUserHandler' :: (MonadIO m, FilterMonad Response m, MonadPlus m, ServerMonad m) => m a -> m a -> (Username -> m a) -> m a
 newUserHandler' existsOrInvalid nomatch succ = withData handler
-  where handler (NewUserInfo user pass1 pass2)
-          | not (saneUsername user) = existsOrInvalid
-          | pass1 /= pass2 = nomatch
-          | otherwise = checkAndAdd existsOrInvalid (succ (Username user)) (Username user) pass1
-        saneUsername str = foldl1 (&&) $ map isAlphaNum str
+    where handler (NewUserInfo user pass1 pass2)
+              | not (saneUsername user) = existsOrInvalid
+              | pass1 /= pass2 = nomatch
+              | otherwise = checkAndAdd existsOrInvalid (succ (Username user)) (Username user) pass1
+          saneUsername str = foldl1 (&&) $ map isAlphaNum str
 
 
 {-
  - Handles data from a new user registration form.  The form must supply
  - fields named "username", "password", and "password2".
  -}
+newAccountHandler :: (MonadIO m, FilterMonad Response m) => m a -> m a -> m a -> NewUserInfo -> m a
 newAccountHandler noMatch uExists good (NewUserInfo user pass1 pass2)
-  | pass1 == pass2 = checkAndAdd uExists good (Username user) pass1
-  | otherwise = noMatch
+    | pass1 == pass2 = checkAndAdd uExists good (Username user) pass1
+    | otherwise      = noMatch
 
-changePassword :: (MonadIO m)
-               => String
-               -> String
-               -> String
-               -> m Bool
-changePassword user oldpass newpass = do
-  mu <- query $ AuthUser user oldpass
-  case mu of
-    (Just u) -> do h <- liftIO $ buildSaltAndHash newpass
-                   update $ UpdateUser (u {userpass = h})
-                   return True
-    Nothing  -> return False
+changePassword :: (MonadIO m) => String -> String -> String -> m Bool
+changePassword user oldpass newpass = 
+    do mu <- query $ AuthUser user oldpass
+       case mu of
+         (Just u) -> do h <- liftIO $ buildSaltAndHash newpass
+                        update $ UpdateUser (u {userpass = h})
+                        return True
+         Nothing  -> return False
 
 {-
  - Requiring a login
  -}
 
+clearSessionCookie :: (FilterMonad Response m) => m ()
 clearSessionCookie = addCookie 0 (mkCookie sessionCookie "0")
 
+
+getSessionId :: (Read a) => ReaderT ([(String, Input)], [(String, Cookie)]) Maybe (Maybe a)
 getSessionId = liftM Just (readCookieValue sessionCookie) `mplus` return Nothing
 
+
+withSessionId :: (Read a, MonadPlus m, ServerMonad m) => (Maybe a -> m r) -> m r
 withSessionId = withDataFn getSessionId
 
+
+getLoggedInUser :: (MonadIO m, MonadPlus m, ServerMonad m) => m (Maybe SessionData)
 getLoggedInUser = withSessionId action
-  where action (Just sid) = query $ GetSession sid
-        action Nothing    = return Nothing
+    where action (Just sid) = query $ GetSession sid
+          action Nothing    = return Nothing
 
-withSession :: (MonadIO m)
-            => (SessionData -> ServerPartT m a)
-            -> ServerPartT m a
-            -> ServerPartT m a
+
+withSession :: (MonadIO m) => (SessionData -> ServerPartT m a) -> ServerPartT m a -> ServerPartT m a
 withSession f guestSPT = withSessionId action
-  where action (Just sid) = (query $ GetSession sid) >>= (maybe noSession f)
-        action Nothing    = guestSPT
-        noSession = clearSessionCookie >> guestSPT
+    where action (Just sid) = (query $ GetSession sid) >>= (maybe noSession f)
+          action Nothing    = guestSPT
+          noSession         = clearSessionCookie >> guestSPT
 
-loginGate :: (MonadIO m)
-          => ServerPartT m a
-          -> ServerPartT m a
-          -> ServerPartT m a
+loginGate :: (MonadIO m) => ServerPartT m a -> ServerPartT m a -> ServerPartT m a
 loginGate reg guest = withSession (\_ -> reg) guest
-
